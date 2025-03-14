@@ -2,6 +2,7 @@ import copy
 import numpy as np
 from rdkit.Chem import RemoveAllHs
 from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 from tqdm import tqdm
 import torch
 
@@ -162,47 +163,48 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
 
     for data in tqdm(loader, total=len(loader)):
-        if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
+        if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and len(data) == 1: #and data.num_graphs == 1:
             print("Skipping batch of size 1 since otherwise batchnorm would not work.")
             continue
         optimizer.zero_grad()
         data = [d.to(device) for d in data] if device.type == 'cuda' else data
-        try:
-            tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
-            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
-            if loss_tuple is None:
-                print("None loss tuple, skipping")
-                continue
-            loss = loss_tuple[0]
+        # try:
+        data = Batch.from_data_list(data)
+        tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
+        loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
+        if loss_tuple is None:
+            print("None loss tuple, skipping")
+            continue
+        loss = loss_tuple[0]
 
-            if torch.any(torch.isnan(loss)):
-                names = data.name if device.type == 'cpu' else [d.name for d in data]
-                print("Nan loss, skipping batch with complexes", names)
-                continue
-            loss.backward()
-            optimizer.step()
-            if ema_weights is not None: ema_weights.update(model.parameters())
-            meter.add([loss.cpu().detach(), *loss_tuple[1:]])
+        if torch.any(torch.isnan(loss)):
+            names = data.name if device.type == 'cpu' else [d.name for d in data]
+            print("Nan loss, skipping batch with complexes", names)
+            continue
+        loss.backward()
+        optimizer.step()
+        if ema_weights is not None: ema_weights.update(model.parameters())
+        meter.add([loss.cpu().detach(), *loss_tuple[1:]])
             
-        except RuntimeError as e:
-            if 'out of memory' in str(e):
-                print('| WARNING: ran out of memory, skipping batch')
-                for p in model.parameters():
-                    if p.grad is not None:
-                        del p.grad  # free some memory
-                torch.cuda.empty_cache()
-                continue
-            elif 'Input mismatch' in str(e):
-                print('| WARNING: weird torch_cluster error, skipping batch')
-                for p in model.parameters():
-                    if p.grad is not None:
-                        del p.grad  # free some memory
-                torch.cuda.empty_cache()
-                continue
-            else:
-                #raise e
-                print(e)
-                continue
+        # except RuntimeError as e:
+        #     if 'out of memory' in str(e):
+        #         print('| WARNING: ran out of memory, skipping batch')
+        #         for p in model.parameters():
+        #             if p.grad is not None:
+        #                 del p.grad  # free some memory
+        #         torch.cuda.empty_cache()
+        #         continue
+        #     elif 'Input mismatch' in str(e):
+        #         print('| WARNING: weird torch_cluster error, skipping batch')
+        #         for p in model.parameters():
+        #             if p.grad is not None:
+        #                 del p.grad  # free some memory
+        #         torch.cuda.empty_cache()
+        #         continue
+        #     else:
+        #         #raise e
+        #         print(e)
+        #         continue
             
     return meter.summary()
 

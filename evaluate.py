@@ -16,7 +16,6 @@ from argparse import ArgumentParser, Namespace, FileType
 from datetime import datetime
 from functools import partial
 import numpy as np
-import wandb
 from rdkit import RDLogger
 from torch_geometric.loader import DataLoader
 from rdkit.Chem import RemoveAllHs
@@ -122,7 +121,6 @@ if __name__ == '__main__':
     parser.add_argument('--no_random', action='store_true', default=False, help='Whether to add randomness in diffusion steps')
     parser.add_argument('--no_final_step_noise', action='store_true', default=False, help='Whether to add noise after the final step')
     parser.add_argument('--ode', action='store_true', default=False, help='Whether to run the probability flow ODE')
-    parser.add_argument('--wandb', action='store_true', default=False, help='') # TODO remove
     parser.add_argument('--inference_steps', type=int, default=40, help='Number of denoising steps')
     parser.add_argument('--limit_complexes', type=int, default=0, help='Limit to the number of complexes')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for dataset creation')
@@ -305,15 +303,6 @@ if __name__ == '__main__':
             confidence_args = None
             confidence_model_args = None
 
-    if args.wandb:
-        run = wandb.init(
-            entity='',
-            settings=wandb.Settings(start_method="fork"),
-            project=args.project,
-            name=args.run_name,
-            config=args
-        )
-
     if args.pocket_knowledge and args.different_schedules:
         t_max = (np.log(args.pocket_tr_max) - np.log(score_model_args.tr_sigma_min)) / (
                     np.log(score_model_args.tr_sigma_max) - np.log(score_model_args.tr_sigma_min))
@@ -427,6 +416,7 @@ if __name__ == '__main__':
                         orig_complex_graph['ligand'].orig_pos[filterHs] - orig_complex_graph.original_center.cpu().numpy(),
                         axis=0)
 
+                # This array contains the predicted ligand positions for each rank
                 ligand_pos = np.asarray(
                         [complex_graph['ligand'].pos.cpu().numpy()[filterHs] for complex_graph in data_list])
 
@@ -471,8 +461,10 @@ if __name__ == '__main__':
                     gnina_scores = np.asarray(gnina_scores)
                     gnina_score_list.append(gnina_scores)
 
-                mol = RemoveAllHs(orig_complex_graph.mol[0])
+                mol = RemoveAllHs(orig_complex_graph.mol[0])   # Original ligand without Hs
                 rmsds = []
+                # orig_ligand_pos contains an array with the 3D positions of the original ligand (without Hs)
+                # for multiple conformations
                 for i in range(len(orig_ligand_pos)):
                     try:
                         rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
@@ -760,33 +752,3 @@ if __name__ == '__main__':
 
     for k in performance_metrics:
         print(k, performance_metrics[k])
-
-    if args.wandb:
-        wandb.log(performance_metrics)
-        histogram_metrics_list = [('rmsd', rmsds[:, 0]),
-                                  ('centroid_distance', centroid_distances[:, 0]),
-                                  ('mean_rmsd', rmsds.mean(axis=1)),
-                                  ('mean_centroid_distance', centroid_distances.mean(axis=1))]
-        if N >= 5:
-            histogram_metrics_list.append(('top5_rmsds', top5_rmsds))
-            histogram_metrics_list.append(('top5_centroid_distances', top5_centroid_distances))
-        if N >= 10:
-            histogram_metrics_list.append(('top10_rmsds', top10_rmsds))
-            histogram_metrics_list.append(('top10_centroid_distances', top10_centroid_distances))
-        if confidence_model is not None:
-            histogram_metrics_list.append(('reverse_filtered_rmsds', reverse_filtered_rmsds))
-            histogram_metrics_list.append(('reverse_filtered_centroid_distances', reverse_filtered_centroid_distances))
-            histogram_metrics_list.append(('filtered_rmsd', filtered_rmsds))
-            histogram_metrics_list.append(('filtered_centroid_distance', filtered_centroid_distances))
-            if N >= 5:
-                histogram_metrics_list.append(('top5_filtered_rmsds', top5_filtered_rmsds))
-                histogram_metrics_list.append(('top5_filtered_centroid_distances', top5_filtered_centroid_distances))
-                histogram_metrics_list.append(('top5_reverse_filtered_rmsds', top5_reverse_filtered_rmsds))
-                histogram_metrics_list.append(
-                    ('top5_reverse_filtered_centroid_distances', top5_reverse_filtered_centroid_distances))
-            if N >= 10:
-                histogram_metrics_list.append(('top10_filtered_rmsds', top10_filtered_rmsds))
-                histogram_metrics_list.append(('top10_filtered_centroid_distances', top10_filtered_centroid_distances))
-                histogram_metrics_list.append(('top10_reverse_filtered_rmsds', top10_reverse_filtered_rmsds))
-                histogram_metrics_list.append(
-                    ('top10_reverse_filtered_centroid_distances', top10_reverse_filtered_centroid_distances))

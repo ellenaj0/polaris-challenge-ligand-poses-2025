@@ -1,0 +1,16 @@
+name: diffdock
+channels:
+  - pyg
+  - nvidia
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9.18
+  - pip
+  - python-devtools
+  # Need older setuptools for openfold
+  - setuptools=69.5.1
+  # ProDy needs to be installed with conda
+  - prody==2.2.0
+  - scipy==1.12.0

@@ -1,0 +1,4 @@
+preds_dir: data/polaris_train/predictions_aligned_full
+results_dir: results/polaris_train_40
+
+samples_per_complex: 40

@@ -148,7 +148,7 @@ stdout*
 !/workdir/paper_confidence_model
 !/workdir/paper_score_model
 runs2
-results
+predictions
 # this excludes everything in the runs directory except for that specific run
 !/runs
 /runs/*
@@ -166,3 +166,11 @@ temp6.py
 temp7.py
 esm
 
+# data Directory
+/scripts/data
+
+# logs Directory
+/logs
+
+# results Directory
+/results

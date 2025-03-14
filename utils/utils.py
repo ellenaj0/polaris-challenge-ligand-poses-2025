@@ -223,13 +223,7 @@ def get_model(args, device, t_to_sigma, no_parallel=False, confidence_mode=False
         else:
             model_class = CGModel
 
-        lm_embedding_type = None
-        if ('moad_esm_embeddings_path' in args and args.moad_esm_embeddings_path is not None) or \
-            ('pdbbind_esm_embeddings_path' in args and args.pdbbind_esm_embeddings_path is not None) or \
-            ('pdbsidechain_esm_embeddings_path' in args and args.pdbsidechain_esm_embeddings_path is not None) or \
-            ('esm_embeddings_path' in args and args.esm_embeddings_path is not None):
-            lm_embedding_type = 'precomputed'
-        if 'esm_embeddings_model' in args and args.esm_embeddings_model is not None: lm_embedding_type = args.esm_embeddings_model
+        lm_embedding_type = 'precomputed'
 
         model = model_class(t_to_sigma=t_to_sigma,
                             device=device,

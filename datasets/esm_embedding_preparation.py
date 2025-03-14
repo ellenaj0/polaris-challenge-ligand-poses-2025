@@ -7,7 +7,7 @@ from Bio.SeqRecord import SeqRecord
 from tqdm import tqdm
 from Bio import SeqIO
 
-from datasets.constants import three_to_one
+from constants import three_to_one
 
 parser = ArgumentParser()
 parser.add_argument('--out_file', type=str, default="data/prepared_for_esm.fasta")
@@ -87,3 +87,19 @@ elif args.dataset == 'moad':
     with open(args.out_file, 'wb') as f:
         pickle.dump(name_to_sequence, f)
 
+elif args.dataset == "posebusters":
+    name_to_sequence = {}
+
+    for name in tqdm(names):
+        if name == '.DS_Store': continue
+        if not os.path.exists(os.path.join(data_dir, name, f'{name}_protein.pdb')):
+            print(f"We are skipping {name} because there was no {name}_protein.pdb")
+            continue
+        rec_path = os.path.join(data_dir, name, f'{name}_protein.pdb')
+        l = get_structure_from_file(rec_path)
+        for i, seq in enumerate(l):
+            name_to_sequence[name + '_chain_' + str(i)] = seq
+
+    # save to file
+    with open(args.out_file, 'wb') as f:
+        pickle.dump(name_to_sequence, f)

@@ -1,14 +1,9 @@
-import functools
 import logging
-import pprint
-import traceback
-from argparse import ArgumentParser, Namespace, FileType
+from argparse import Namespace
 import copy
 import os
 from functools import partial
 import warnings
-from typing import Mapping, Optional
-
 import yaml
 
 # Ignore pandas deprecation warning around pyarrow
@@ -19,7 +14,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torch_geometric.loader import DataLoader
-
 from rdkit import RDLogger
 from rdkit.Chem import RemoveAllHs
 
@@ -34,6 +28,9 @@ from utils.sampling import randomize_position, sampling
 from utils.utils import get_model
 from utils.visualise import PDBFile
 from tqdm import tqdm
+
+import sys
+from src.utils import get_logger
 
 if os.name != 'nt':  # The line does not work on Windows
     import resource
@@ -54,71 +51,10 @@ REMOTE_URLS = [f"{REPOSITORY_URL}/releases/latest/download/diffdock_models.zip",
                f"{REPOSITORY_URL}/releases/download/v1.1/diffdock_models.zip"]
 
 
-def get_parser():
-    parser = ArgumentParser()
-    parser.add_argument('--config', type=FileType(mode='r'), default='default_inference_args.yaml')
-    parser.add_argument('--protein_ligand_csv', type=str, default=None, help='Path to a .csv file specifying the input as described in the README. If this is not None, it will be used instead of the --protein_path, --protein_sequence and --ligand parameters')
-    parser.add_argument('--complex_name', type=str, default=None, help='Name that the complex will be saved with')
-    parser.add_argument('--protein_path', type=str, default=None, help='Path to the protein file')
-    parser.add_argument('--protein_sequence', type=str, default=None, help='Sequence of the protein for ESMFold, this is ignored if --protein_path is not None')
-    parser.add_argument('--ligand_description', type=str, default='CCCCC(NC(=O)CCC(=O)O)P(=O)(O)OC1=CC=CC=C1', help='Either a SMILES string or the path to a molecule file that rdkit can read')
+def inference_diffdock(dataset_df: pd.DataFrame, args):
 
-    parser.add_argument('-l', '--log', '--loglevel', type=str, default='WARNING', dest="loglevel",
-                        help='Log level. Default %(default)s')
-
-    parser.add_argument('--out_dir', type=str, default='predictions/user_inference', help='Directory where the outputs will be written to')
-    parser.add_argument('--save_visualisation', action='store_true', default=False, help='Save a pdb file with all of the steps of the reverse diffusion')
-    parser.add_argument('--samples_per_complex', type=int, default=10, help='Number of samples to generate')
-
-    parser.add_argument('--model_dir', type=str, default=None, help='Path to folder with trained score model and hyperparameters')
-    parser.add_argument('--ckpt', type=str, default='best_ema_inference_epoch_model.pt', help='Checkpoint to use for the score model')
-    parser.add_argument('--confidence_model_dir', type=str, default=None, help='Path to folder with trained confidence model and hyperparameters')
-    parser.add_argument('--confidence_ckpt', type=str, default='best_model.pt', help='Checkpoint to use for the confidence model')
-
-    parser.add_argument('--batch_size', type=int, default=10, help='')
-    parser.add_argument('--no_final_step_noise', action='store_true', default=True, help='Use no noise in the final step of the reverse diffusion')
-    parser.add_argument('--inference_steps', type=int, default=20, help='Number of denoising steps')
-    parser.add_argument('--actual_steps', type=int, default=None, help='Number of denoising steps that are actually performed')
-
-    parser.add_argument('--old_score_model', action='store_true', default=False, help='')
-    parser.add_argument('--old_confidence_model', action='store_true', default=True, help='')
-    parser.add_argument('--initial_noise_std_proportion', type=float, default=-1.0, help='Initial noise std proportion')
-    parser.add_argument('--choose_residue', action='store_true', default=False, help='')
-
-    parser.add_argument('--temp_sampling_tr', type=float, default=1.0)
-    parser.add_argument('--temp_psi_tr', type=float, default=0.0)
-    parser.add_argument('--temp_sigma_data_tr', type=float, default=0.5)
-    parser.add_argument('--temp_sampling_rot', type=float, default=1.0)
-    parser.add_argument('--temp_psi_rot', type=float, default=0.0)
-    parser.add_argument('--temp_sigma_data_rot', type=float, default=0.5)
-    parser.add_argument('--temp_sampling_tor', type=float, default=1.0)
-    parser.add_argument('--temp_psi_tor', type=float, default=0.0)
-    parser.add_argument('--temp_sigma_data_tor', type=float, default=0.5)
-
-    parser.add_argument('--gnina_minimize', action='store_true', default=False, help='')
-    parser.add_argument('--gnina_path', type=str, default='gnina', help='')
-    parser.add_argument('--gnina_log_file', type=str, default='gnina_log.txt', help='')  # To redirect gnina subprocesses stdouts from the terminal window
-    parser.add_argument('--gnina_full_dock', action='store_true', default=False, help='')
-    parser.add_argument('--gnina_autobox_add', type=float, default=4.0)
-    parser.add_argument('--gnina_poses_to_optimize', type=int, default=1)
-
-    return parser
-
-
-def main(args):
-
-    configure_logger(args.loglevel)
+    configure_logger(loglevel=args.loglevel, logfile=args.logfile)
     logger = get_logger()
-
-    if args.config:
-        config_dict = yaml.load(args.config, Loader=yaml.FullLoader)
-        arg_dict = args.__dict__
-        for key, value in config_dict.items():
-            if isinstance(value, list):
-                for v in value:
-                    arg_dict[key].append(v)
-            else:
-                arg_dict[key] = value
 
     # Download models if they don't exist locally
     if not os.path.exists(args.model_dir):
@@ -152,26 +88,18 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"DiffDock will run on {device}")
 
-    if args.protein_ligand_csv is not None:
-        df = pd.read_csv(args.protein_ligand_csv)
-        complex_name_list = set_nones(df['complex_name'].tolist())
-        protein_path_list = set_nones(df['protein_path'].tolist())
-        protein_sequence_list = set_nones(df['protein_sequence'].tolist())
-        ligand_description_list = set_nones(df['ligand_description'].tolist())
-    else:
-        complex_name_list = [args.complex_name if args.complex_name else f"complex_0"]
-        protein_path_list = [args.protein_path]
-        protein_sequence_list = [args.protein_sequence]
-        ligand_description_list = [args.ligand_description]
+    # Use the dataset passed in to get protein paths and ligand descriptions
+    protein_path_list = dataset_df['protein_path'].tolist()
+    ligand_description_list = dataset_df['cxsmiles'].tolist()
 
-    complex_name_list = [name if name is not None else f"complex_{i}" for i, name in enumerate(complex_name_list)]
+    complex_name_list = [f"complex_{i}" for i in range(len(dataset_df))]
     for name in complex_name_list:
         write_dir = f'{args.out_dir}/{name}'
         os.makedirs(write_dir, exist_ok=True)
 
     # preprocessing of complexes into geometric graphs
     test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
-                                    ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
+                                    ligand_descriptions=ligand_description_list, protein_sequences=None,   # TODO: Add protein sequences to dataset passed in?
                                     lm_embeddings=True,
                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
@@ -185,7 +113,7 @@ def main(args):
                     'Loading (or creating if not existing) the data for the confidence model now.')
         confidence_test_dataset = \
             InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
-                             ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
+                             ligand_descriptions=ligand_description_list, protein_sequences=None,   # TODO: Add protein sequences to dataset passed in?
                              lm_embeddings=True,
                              receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
                              c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
@@ -257,6 +185,7 @@ def main(args):
                 visualization_list = None
 
             # run reverse diffusion
+            print("Running reverse diffusion...")
             data_list, confidence = sampling(data_list=data_list, model=model,
                                              inference_steps=args.actual_steps if args.actual_steps is not None else args.inference_steps,
                                              tr_schedule=tr_schedule, rot_schedule=tr_schedule, tor_schedule=tr_schedule,
@@ -270,6 +199,7 @@ def main(args):
                                              temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot,
                                                               args.temp_sigma_data_tor])
 
+            # This array contains the predicted ligand positions for all ranks
             ligand_pos = np.asarray([complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy() for complex_graph in data_list])
 
             # reorder predictions based on confidence output
@@ -283,6 +213,7 @@ def main(args):
 
             # save predictions
             write_dir = f'{args.out_dir}/{complex_name_list[idx]}'
+            # Copy the original ligand and modify it according to the predicted positions, then save it
             for rank, pos in enumerate(ligand_pos):
                 mol_pred = copy.deepcopy(lig)
                 if score_model_args.remove_hs: mol_pred = RemoveAllHs(mol_pred)
@@ -311,8 +242,3 @@ def main(args):
     else:
         logger.info(result_msg)
     logger.info(f"Results saved in {args.out_dir}")
-
-
-if __name__ == "__main__":
-    _args = get_parser().parse_args()
-    main(_args)

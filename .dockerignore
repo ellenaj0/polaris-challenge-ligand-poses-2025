@@ -6,8 +6,8 @@
 .git
 .gitattributes
 
-# Ignore generated user results
-results/*
+# Ignore generated user predictions
+predictions/*
 tmp/
 
 # Ignore trained models
