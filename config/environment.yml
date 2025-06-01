@@ -1,4 +1,4 @@
-name: diffdock
+name: polaris_diffdock
 channels:
   - pyg
   - nvidia
@@ -6,11 +6,9 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9.18
+  - python=3.10.16
   - pip
   - python-devtools
-  # Need older setuptools for openfold
-  - setuptools=69.5.1
   # ProDy needs to be installed with conda
   - prody==2.2.0
   - scipy==1.12.0
